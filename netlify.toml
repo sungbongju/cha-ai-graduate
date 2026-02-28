@@ -5,18 +5,6 @@
 [functions]
   node_bundler = "esbuild"
 
-# API 프록시 리다이렉트 (선택사항 - 함수 URL을 깔끔하게)
-[[redirects]]
-  from = "/api/*"
-  to = "/.netlify/functions/:splat"
-  status = 200
-
-# SPA 라우팅 (필요시)
-[[redirects]]
-  from = "/*"
-  to = "/index.html"
-  status = 200
-
 # 보안 헤더
 [[headers]]
   for = "/*"
@@ -24,4 +12,3 @@
     X-Frame-Options = "DENY"
     X-Content-Type-Options = "nosniff"
     Referrer-Policy = "strict-origin-when-cross-origin"
-    Content-Security-Policy = "default-src 'self'; script-src 'self' 'unsafe-inline' 'unsafe-eval' https://cdn.jsdelivr.net https://fonts.googleapis.com; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com; connect-src 'self' https://*.heygen.com wss://*.heygen.com https://*.livekit.cloud wss://*.livekit.cloud; media-src 'self' blob:; img-src 'self' data: https://images.unsplash.com;"
