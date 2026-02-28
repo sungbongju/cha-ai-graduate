@@ -670,6 +670,38 @@
     .chat-input-row { display: flex; gap: 0.5rem; align-items: center; }
     .chat-input-row .chat-input { flex: 1; }
 
+    /* ─── Voice Status Indicator ─── */
+    .voice-status {
+      display: flex; align-items: center; justify-content: center;
+      gap: 0.6rem; padding: 0.7rem 1rem;
+      background: rgba(0, 212, 170, 0.06);
+      border: 1px solid rgba(0, 212, 170, 0.15);
+      border-radius: 12px; margin-bottom: 0.6rem;
+    }
+    .voice-status.speaking {
+      background: rgba(138, 100, 255, 0.06);
+      border-color: rgba(138, 100, 255, 0.2);
+    }
+    .voice-status.thinking-state {
+      background: rgba(255, 180, 50, 0.06);
+      border-color: rgba(255, 180, 50, 0.2);
+    }
+    .voice-indicator { display: flex; gap: 3px; align-items: center; }
+    .voice-dot {
+      width: 6px; height: 6px; border-radius: 50%;
+      background: var(--accent);
+      animation: voicePulse 1.4s ease-in-out infinite;
+    }
+    .voice-dot:nth-child(2) { animation-delay: 0.2s; }
+    .voice-dot:nth-child(3) { animation-delay: 0.4s; }
+    .voice-status.speaking .voice-dot { background: #a78bfa; }
+    .voice-status.thinking-state .voice-dot { background: #fbbf24; }
+    @keyframes voicePulse {
+      0%, 100% { transform: scale(1); opacity: 0.5; }
+      50% { transform: scale(1.6); opacity: 1; }
+    }
+    .voice-label { font-size: 0.78rem; color: var(--text-dim); }
+
     .security-notice {
       background: rgba(255, 107, 107, 0.06);
       border: 1px solid rgba(255, 107, 107, 0.15);
@@ -1316,14 +1348,23 @@
         <!-- 대화 히스토리 -->
         <div class="chat-history" id="chatHistory"></div>
 
-        <!-- 입력 영역: 마이크 + 텍스트 + 전송 -->
+        <!-- 음성 상태 표시 -->
+        <div class="voice-status" id="voiceStatus" style="display:none;">
+          <div class="voice-indicator" id="voiceIndicator">
+            <span class="voice-dot"></span>
+            <span class="voice-dot"></span>
+            <span class="voice-dot"></span>
+          </div>
+          <span class="voice-label" id="voiceLabel">듣고 있어요...</span>
+        </div>
+
+        <!-- 텍스트 입력 (음성 대안) -->
         <div class="chat-input-row">
-          <button class="mic-btn" id="micBtn" onclick="toggleMic()" disabled title="음성으로 질문하기">🎤</button>
           <input
             type="text"
             class="chat-input"
             id="taskInput"
-            placeholder="질문을 입력하거나 🎤 마이크를 눌러 말씀하세요"
+            placeholder="텍스트로도 질문할 수 있어요"
             disabled
             onkeydown="if(event.key==='Enter') sendMessage()"
           />
@@ -1376,8 +1417,8 @@
 
 <script>
   // ═══════════════════════════════════════════════════════
-  //  HeyGen Interactive Avatar + OpenAI GPT + 음성 대화
-  //  🎤 마이크 → 음성인식 → GPT 상담사 → 아바타 대답
+  //  HeyGen Interactive Avatar + OpenAI GPT + 자동 음성 대화
+  //  🎤 자동 듣기 → GPT 상담사 → 아바타 대답 → 다시 듣기
   // ═══════════════════════════════════════════════════════
 
   const AVATAR_CONFIG = {
@@ -1386,23 +1427,27 @@
 
   let sessionInfo = null;
   let room = null;
-  let mediaStream = null;
   let sessionToken = null;
-  let chatHistory = [];        // GPT 대화 히스토리
-  let recognition = null;      // 음성인식 객체
+  let chatHistory = [];
+  let recognition = null;
   let isListening = false;
+  let isProcessing = false;     // GPT 처리 중
+  let isSpeaking = false;       // 아바타 말하는 중
+  let autoListenEnabled = true; // 자동 듣기 활성화
+  let silenceTimer = null;      // 무음 타이머
 
-  const mediaEl      = document.getElementById("mediaElement");
-  const startBtnEl   = document.getElementById("startBtn");
-  const closeBtnEl   = document.getElementById("closeBtn");
-  const taskInput    = document.getElementById("taskInput");
-  const sendBtnEl    = document.getElementById("sendBtn");
-  const micBtnEl     = document.getElementById("micBtn");
-  const placeholder  = document.getElementById("avatarPlaceholder");
-  const logEl        = document.getElementById("logArea");
-  const statusDot    = document.getElementById("statusDot");
-  const statusText   = document.getElementById("statusText");
+  const mediaEl       = document.getElementById("mediaElement");
+  const startBtnEl    = document.getElementById("startBtn");
+  const closeBtnEl    = document.getElementById("closeBtn");
+  const taskInput     = document.getElementById("taskInput");
+  const sendBtnEl     = document.getElementById("sendBtn");
+  const placeholder   = document.getElementById("avatarPlaceholder");
+  const logEl         = document.getElementById("logArea");
+  const statusDot     = document.getElementById("statusDot");
+  const statusText    = document.getElementById("statusText");
   const chatHistoryEl = document.getElementById("chatHistory");
+  const voiceStatusEl = document.getElementById("voiceStatus");
+  const voiceLabelEl  = document.getElementById("voiceLabel");
 
   function setStatus(text, active = false) {
     statusText.textContent = text;
@@ -1414,7 +1459,29 @@
     logEl.textContent = `[${new Date().toLocaleTimeString()}] ${msg}\n` + logEl.textContent;
   }
 
-  // ── 채팅 버블 표시 ──
+  // ── 음성 상태 표시 ──
+  function setVoiceState(state) {
+    voiceStatusEl.style.display = "flex";
+    voiceStatusEl.className = "voice-status";
+    switch (state) {
+      case "listening":
+        voiceStatusEl.classList.add("");
+        voiceLabelEl.textContent = "🎤 듣고 있어요... 말씀하세요";
+        break;
+      case "speaking":
+        voiceStatusEl.classList.add("speaking");
+        voiceLabelEl.textContent = "🗣️ 답변하고 있어요...";
+        break;
+      case "thinking":
+        voiceStatusEl.classList.add("thinking-state");
+        voiceLabelEl.textContent = "💭 답변을 준비하고 있어요...";
+        break;
+      case "idle":
+        voiceStatusEl.style.display = "none";
+        break;
+    }
+  }
+
   function addChatBubble(text, type) {
     const bubble = document.createElement("div");
     bubble.className = `chat-bubble ${type}`;
@@ -1424,7 +1491,7 @@
     return bubble;
   }
 
-  // ── 서버리스 함수 호출 헬퍼 ──
+  // ── 서버리스 함수 호출 ──
   async function callProxy(endpoint, payload) {
     try {
       const res = await fetch("/.netlify/functions/heygen-proxy", {
@@ -1444,7 +1511,7 @@
     }
   }
 
-  // ── GPT 상담사에게 질문 ──
+  // ── GPT 상담사 ──
   async function askGPT(message) {
     try {
       const res = await fetch("/.netlify/functions/openai-chat", {
@@ -1452,16 +1519,12 @@
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ message, history: chatHistory })
       });
-      if (!res.ok) {
-        const errText = await res.text();
-        log(`GPT 오류 (${res.status}): ${errText}`);
-        return "죄송합니다, 잠시 후 다시 시도해 주세요.";
-      }
+      if (!res.ok) return "죄송합니다, 잠시 후 다시 시도해 주세요.";
       const data = await res.json();
       return data.reply || "답변을 생성하지 못했습니다.";
     } catch (err) {
-      log(`GPT 호출 실패: ${err.message}`);
-      return "네트워크 오류가 발생했습니다. 다시 시도해 주세요.";
+      log(`GPT 오류: ${err.message}`);
+      return "네트워크 오류가 발생했습니다.";
     }
   }
 
@@ -1473,96 +1536,185 @@
         method: "POST",
         headers: { "Content-Type": "application/json" }
       });
-      if (!res.ok) {
-        const errText = await res.text();
-        log(`토큰 서버 오류: ${errText}`);
-        return null;
-      }
+      if (!res.ok) return null;
       const data = await res.json();
       return data.data?.token;
-    } catch (err) {
-      log(`토큰 네트워크 오류: ${err.message}`);
-      return null;
-    }
+    } catch (err) { return null; }
   }
 
-  // ── 음성인식 초기화 (Web Speech API) ──
+  // ═══════════════════════════════════════
+  //  자동 연속 음성인식
+  // ═══════════════════════════════════════
+
   function initSpeechRecognition() {
-    const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
-    if (!SpeechRecognition) {
-      log("이 브라우저는 음성인식을 지원하지 않습니다");
-      micBtnEl.style.display = "none";
-      return;
+    const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+    if (!SR) {
+      log("음성인식 미지원 브라우저 — 텍스트 입력을 이용해 주세요");
+      return false;
     }
 
-    recognition = new SpeechRecognition();
+    recognition = new SR();
     recognition.lang = "ko-KR";
     recognition.interimResults = true;
-    recognition.continuous = false;
+    recognition.continuous = true;
     recognition.maxAlternatives = 1;
 
     recognition.onstart = () => {
       isListening = true;
-      micBtnEl.classList.add("listening");
-      micBtnEl.textContent = "⏹";
-      taskInput.placeholder = "🎤 듣고 있습니다... 말씀하세요";
-      setStatus("음성 인식 중...", true);
+      setVoiceState("listening");
+      taskInput.placeholder = "🎤 음성 인식 중...";
+      setStatus("대화 중", true);
     };
 
     recognition.onresult = (event) => {
-      let interimTranscript = "";
-      let finalTranscript = "";
+      // 무음 타이머 리셋
+      clearTimeout(silenceTimer);
+
+      let interim = "";
+      let final = "";
 
       for (let i = event.resultIndex; i < event.results.length; i++) {
-        const transcript = event.results[i][0].transcript;
+        const t = event.results[i][0].transcript;
         if (event.results[i].isFinal) {
-          finalTranscript += transcript;
+          final += t;
         } else {
-          interimTranscript += transcript;
+          interim += t;
         }
       }
 
       // 실시간 미리보기
-      taskInput.value = finalTranscript || interimTranscript;
+      if (interim) taskInput.value = interim;
 
-      // 최종 결과가 있으면 자동 전송
-      if (finalTranscript.trim()) {
-        taskInput.value = finalTranscript.trim();
-        setTimeout(() => sendMessage(), 300);
+      // 최종 결과 → 자동 전송
+      if (final.trim()) {
+        taskInput.value = "";
+        stopListening();
+        processUserInput(final.trim());
+      } else {
+        // 중간 결과 후 2초 무음이면 전송
+        silenceTimer = setTimeout(() => {
+          const text = taskInput.value.trim();
+          if (text && text.length > 1) {
+            taskInput.value = "";
+            stopListening();
+            processUserInput(text);
+          }
+        }, 2000);
       }
     };
 
     recognition.onerror = (event) => {
-      log(`음성인식 오류: ${event.error}`);
-      stopListening();
       if (event.error === "not-allowed") {
-        alert("마이크 권한이 필요합니다. 브라우저 설정에서 마이크를 허용해 주세요.");
+        alert("마이크 권한이 필요합니다.\n브라우저 주소창 왼쪽의 🔒 아이콘을 클릭하여 마이크를 허용해 주세요.");
+        autoListenEnabled = false;
+      } else if (event.error === "no-speech") {
+        // 무음 — 다시 시작
+        if (autoListenEnabled && sessionInfo && !isProcessing && !isSpeaking) {
+          setTimeout(startListening, 500);
+        }
+      } else {
+        log(`음성인식 오류: ${event.error}`);
       }
+      isListening = false;
     };
 
     recognition.onend = () => {
-      stopListening();
+      isListening = false;
+      // 자동 재시작 (처리 중이 아닐 때)
+      if (autoListenEnabled && sessionInfo && !isProcessing && !isSpeaking) {
+        setTimeout(startListening, 600);
+      }
     };
+
+    return true;
   }
 
-  function toggleMic() {
-    if (isListening) {
-      recognition.stop();
-    } else {
-      if (!recognition) initSpeechRecognition();
-      if (recognition) recognition.start();
+  function startListening() {
+    if (!recognition || isListening || isProcessing || isSpeaking || !sessionInfo) return;
+    try {
+      recognition.start();
+    } catch (e) {
+      // 이미 시작된 경우 무시
     }
   }
 
   function stopListening() {
+    clearTimeout(silenceTimer);
     isListening = false;
-    micBtnEl.classList.remove("listening");
-    micBtnEl.textContent = "🎤";
-    taskInput.placeholder = "질문을 입력하거나 🎤 마이크를 눌러 말씀하세요";
-    if (sessionInfo) setStatus("대화 준비 완료", true);
+    if (recognition) {
+      try { recognition.stop(); } catch (e) {}
+    }
   }
 
-  // ── 세션 시작 ──
+  // ═══════════════════════════════════════
+  //  대화 처리 파이프라인
+  // ═══════════════════════════════════════
+
+  async function processUserInput(text) {
+    if (!text || !sessionInfo || isProcessing) return;
+    isProcessing = true;
+
+    // 1) 사용자 메시지 표시
+    addChatBubble(text, "user");
+    log(`질문: ${text}`);
+
+    // 2) GPT에게 질문
+    setVoiceState("thinking");
+    const reply = await askGPT(text);
+
+    // 3) 히스토리 저장
+    chatHistory.push({ role: "user", content: text });
+    chatHistory.push({ role: "assistant", content: reply });
+
+    // 4) 답변 버블 표시
+    addChatBubble(reply, "ai");
+    log(`답변: ${reply.substring(0, 50)}...`);
+
+    // 5) 아바타가 답변 (repeat 모드: GPT 답변만 그대로 읽기)
+    isSpeaking = true;
+    setVoiceState("speaking");
+
+    await callProxy("/v1/streaming.task", {
+      session_id: sessionInfo.session_id,
+      text: reply,
+      task_type: "repeat"
+    });
+
+    // 6) 아바타 말하기 예상 시간 후 자동으로 다시 듣기
+    //    한국어 평균 5자/초 기준으로 대기
+    const speakDuration = Math.max(3000, (reply.length / 5) * 1000 + 1500);
+    setTimeout(() => {
+      isSpeaking = false;
+      isProcessing = false;
+      setStatus("대화 중", true);
+
+      if (autoListenEnabled && sessionInfo) {
+        startListening();
+      } else {
+        setVoiceState("idle");
+      }
+    }, speakDuration);
+  }
+
+  // 텍스트 전송 (입력창)
+  async function sendMessage() {
+    const text = taskInput.value.trim();
+    if (!text || !sessionInfo) return;
+    taskInput.value = "";
+    stopListening();
+    processUserInput(text);
+  }
+
+  function quickAsk(text) {
+    if (!sessionInfo) return;
+    stopListening();
+    processUserInput(text);
+  }
+
+  // ═══════════════════════════════════════
+  //  세션 시작 / 종료
+  // ═══════════════════════════════════════
+
   async function startSession() {
     startBtnEl.classList.add("loading");
     startBtnEl.disabled = true;
@@ -1577,15 +1729,15 @@
       const createRes = await callProxy("/v1/streaming.new", {
         avatar_id: AVATAR_CONFIG.avatarId,
         quality: "medium",
-        voice: { rate: 1.0, emotion: "friendly" },
+        voice: { voice_id: "15d128072e194dc399d2898967941897", rate: 1.0, emotion: "friendly" },
         language: "ko",
         version: "v2",
         video_encoding: "H264"
       });
 
-      if (!createRes.data) throw new Error("세션 생성 실패: " + JSON.stringify(createRes));
+      if (!createRes.data) throw new Error("세션 생성 실패");
       sessionInfo = createRes.data;
-      log(`세션 생성 완료: ${sessionInfo.session_id}`);
+      log(`세션 생성 완료`);
 
       const lk = window.LivekitClient;
       room = new lk.Room({ adaptiveStream: true, dynacast: true });
@@ -1604,30 +1756,44 @@
         session_id: sessionInfo.session_id
       });
 
-      setStatus("대화 준비 완료", true);
-      log("아바타 활성화 — 음성 또는 텍스트로 질문하세요");
-
-      // 대화 히스토리 초기화
+      // UI 활성화
       chatHistory = [];
       chatHistoryEl.innerHTML = "";
-
       closeBtnEl.disabled = false;
       taskInput.disabled = false;
       sendBtnEl.disabled = false;
-      micBtnEl.disabled = false;
-      taskInput.focus();
 
-      // 인사 메시지
-      const greeting = "안녕하세요! 차의과학대학교 AI헬스케어융합학과 대학원에 관심을 가져주셔서 감사합니다. 궁금하신 점이 있으시면 말씀해 주세요.";
+      // 인사 메시지 (repeat 모드!)
+      const greeting = "안녕하세요! 차의과학대학교 AI헬스케어융합학과 대학원 상담을 도와드릴게요. 궁금하신 점을 편하게 말씀해 주세요.";
       addChatBubble(greeting, "ai");
+      isSpeaking = true;
+      setVoiceState("speaking");
+
       await callProxy("/v1/streaming.task", {
         session_id: sessionInfo.session_id,
         text: greeting,
-        task_type: "talk"
+        task_type: "repeat"
       });
 
-      // 음성인식 초기화
-      initSpeechRecognition();
+      log("아바타 활성화 — 자동 음성 대화 모드");
+
+      // 인사 끝난 후 자동 듣기 시작
+      const greetDuration = Math.max(3000, (greeting.length / 5) * 1000 + 1500);
+      setTimeout(() => {
+        isSpeaking = false;
+        isProcessing = false;
+        setStatus("대화 중", true);
+
+        // 음성인식 시작
+        autoListenEnabled = true;
+        const ok = initSpeechRecognition();
+        if (ok) {
+          startListening();
+        } else {
+          setVoiceState("idle");
+          taskInput.focus();
+        }
+      }, greetDuration);
 
     } catch (err) {
       log(`오류: ${err.message}`);
@@ -1638,86 +1804,37 @@
     }
   }
 
-  // ── 메시지 전송 (GPT 경유) ──
-  async function sendMessage() {
-    const text = taskInput.value.trim();
-    if (!text || !sessionInfo) return;
-
-    taskInput.value = "";
-    taskInput.disabled = true;
-    sendBtnEl.disabled = true;
-    micBtnEl.disabled = true;
-
-    // 1) 사용자 메시지 표시
-    addChatBubble(text, "user");
-    log(`질문: ${text}`);
-
-    // 2) GPT에게 질문
-    const thinkingBubble = addChatBubble("답변을 생각하고 있어요...", "thinking");
-    setStatus("AI 답변 생성 중...", true);
-
-    const reply = await askGPT(text);
-
-    // 3) 대화 히스토리에 추가
-    chatHistory.push({ role: "user", content: text });
-    chatHistory.push({ role: "assistant", content: reply });
-
-    // 4) 답변 버블 교체
-    thinkingBubble.textContent = reply;
-    thinkingBubble.className = "chat-bubble ai";
-    chatHistoryEl.scrollTop = chatHistoryEl.scrollHeight;
-    log(`답변: ${reply.substring(0, 60)}...`);
-
-    // 5) 아바타가 답변 말하기
-    setStatus("아바타 답변 중...", true);
-    await callProxy("/v1/streaming.task", {
-      session_id: sessionInfo.session_id,
-      text: reply,
-      task_type: "talk"
-    });
-
-    setStatus("대화 준비 완료", true);
-    taskInput.disabled = false;
-    sendBtnEl.disabled = false;
-    micBtnEl.disabled = false;
-    taskInput.focus();
-  }
-
-  function quickAsk(text) {
-    if (!sessionInfo) return;
-    taskInput.value = text;
-    sendMessage();
-  }
-
-  // ── 세션 종료 ──
   async function closeSession() {
     if (!sessionInfo) return;
     setStatus("종료 중...");
-    log("세션 종료 요청...");
+    log("세션 종료...");
 
-    if (recognition && isListening) recognition.stop();
+    autoListenEnabled = false;
+    stopListening();
 
     try {
       await callProxy("/v1/streaming.stop", {
         session_id: sessionInfo.session_id
       });
-    } catch (e) { /* ignore */ }
+    } catch (e) {}
 
     if (room) { await room.disconnect(); room = null; }
     mediaEl.srcObject = null;
     placeholder.style.display = "flex";
     sessionInfo = null;
-    mediaStream = null;
     sessionToken = null;
     chatHistory = [];
+    isProcessing = false;
+    isSpeaking = false;
+    recognition = null;
 
     startBtnEl.disabled = false;
     closeBtnEl.disabled = true;
     taskInput.disabled = true;
     sendBtnEl.disabled = true;
-    micBtnEl.disabled = true;
+    setVoiceState("idle");
     setStatus("대기 중");
-    log("세션 종료");
+    log("세션 종료 완료");
   }
 
   // ═══════════════════════════════════════════════════════
