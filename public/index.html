@@ -1719,12 +1719,12 @@
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ message, history: chatHistory })
       });
-      if (!res.ok) return "죄송합니다, 잠시 후 다시 시도해 주세요.";
+      if (!res.ok) return { reply: "죄송합니다, 잠시 후 다시 시도해 주세요.", ttsReply: "죄송합니다, 잠시 후 다시 시도해 주세요." };
       const data = await res.json();
-      return data.reply || "답변을 생성하지 못했습니다.";
+      return { reply: data.reply || "답변을 생성하지 못했습니다.", ttsReply: data.ttsReply || data.reply || "답변을 생성하지 못했습니다." };
     } catch (err) {
       log(`GPT 오류: ${err.message}`);
-      return "네트워크 오류가 발생했습니다.";
+      return { reply: "네트워크 오류가 발생했습니다.", ttsReply: "네트워크 오류가 발생했습니다." };
     }
   }
 
@@ -1860,29 +1860,29 @@
 
     // 2) GPT에게 질문
     setVoiceState("thinking");
-    const reply = await askGPT(text);
+    const { reply, ttsReply } = await askGPT(text);
 
     // 3) 히스토리 저장
     chatHistory.push({ role: "user", content: text });
     chatHistory.push({ role: "assistant", content: reply });
 
-    // 4) 답변 버블 표시
+    // 4) 답변 버블 표시 (원본 텍스트)
     addChatBubble(reply, "ai");
     log(`답변: ${reply.substring(0, 50)}...`);
 
-    // 5) 아바타가 답변 (repeat 모드: GPT 답변만 그대로 읽기)
+    // 5) 아바타가 답변 (TTS 발음 최적화 텍스트)
     isSpeaking = true;
     setVoiceState("speaking");
 
     await callProxy("/v1/streaming.task", {
       session_id: sessionInfo.session_id,
-      text: reply,
+      text: ttsReply,
       task_type: "repeat"
     });
 
     // 6) 아바타 말하기 예상 시간 후 자동으로 다시 듣기
     //    한국어 평균 5자/초 기준으로 대기
-    const speakDuration = Math.max(3000, (reply.length / 5) * 1000 + 1500);
+    const speakDuration = Math.max(3000, (ttsReply.length / 5) * 1000 + 1500);
     setTimeout(() => {
       isSpeaking = false;
       isProcessing = false;
