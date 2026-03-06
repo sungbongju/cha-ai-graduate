@@ -1963,22 +1963,23 @@
       taskInput.disabled = false;
       sendBtnEl.disabled = false;
 
-      // 인사 메시지 (repeat 모드!)
-      const greeting = "안녕하세요! 차 의과학 대학교, 에이 아이 헬스케어 융합학과 대학원 상담을 도와드릴게요. 궁금하신 점을 편하게 말씀해 주세요.";
-      addChatBubble(greeting, "ai");
+      // 인사 메시지 (채팅용 원본 / TTS용 발음 분리)
+      const greetingDisplay = "안녕하세요! 차의과학대학교 AI헬스케어융합학과 대학원 상담을 도와드릴게요. 궁금하신 점을 편하게 말씀해 주세요.";
+      const greetingTTS = "안녕하세요! 차 의과학 대학교, 에이아이 헬스케어 융합학과 대학원 상담을 도와드릴게요. 궁금하신 점을 편하게 말씀해 주세요.";
+      addChatBubble(greetingDisplay, "ai");
       isSpeaking = true;
       setVoiceState("speaking");
 
       await callProxy("/v1/streaming.task", {
         session_id: sessionInfo.session_id,
-        text: greeting,
+        text: greetingTTS,
         task_type: "repeat"
       });
 
       log("아바타 활성화 — 자동 음성 대화 모드");
 
       // 인사 끝난 후 자동 듣기 시작
-      const greetDuration = Math.max(3000, (greeting.length / 5) * 1000 + 1500);
+      const greetDuration = Math.max(3000, (greetingTTS.length / 5) * 1000 + 1500);
       setTimeout(() => {
         isSpeaking = false;
         isProcessing = false;
